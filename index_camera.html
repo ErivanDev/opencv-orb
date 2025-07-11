@@ -1,0 +1,144 @@
+<!DOCTYPE html>
+<html>
+
+<head>
+  <meta charset="utf-8">
+  <title>Image Tracker com ORB</title>
+  <style>
+    video,
+    canvas {
+      max-width: 100%;
+      display: block;
+      margin: 10px 0;
+    }
+  </style>
+</head>
+
+<body>
+  <h2>Imagem de referência embutida:</h2>
+  <img id="refImage" src="1.jpg" style="display:none;" />
+
+  <h2>Stream da Câmera:</h2>
+  <video id="video" autoplay playsinline width="640" height="480"></video>
+  <canvas id="canvas" width="640" height="480" style="display:none;"></canvas>
+
+  <p>
+    <strong>Features detectadas:</strong> <span id="featureCount">0</span><br>
+    <strong>Boas correspondências:</strong> <span id="goodMatchesCount">0</span>
+  </p>
+
+  <script src="https://docs.opencv.org/4.x/opencv.js"></script>
+  <script>
+    let refDescriptors = null;
+    let orb, bf;
+
+    const video = document.getElementById("video");
+    const canvas = document.getElementById("canvas");
+    const ctx = canvas.getContext("2d");
+
+    function startCamera() {
+      navigator.mediaDevices.getUserMedia({ video: true })
+        .then(stream => video.srcObject = stream)
+        .catch(err => console.error("Erro ao acessar a câmera:", err));
+    }
+
+    cv['onRuntimeInitialized'] = () => {
+      console.log("✅ OpenCV.js pronto!");
+      orb = new cv.ORB();
+      bf = new cv.BFMatcher(cv.NORM_HAMMING, true);
+
+      startCamera();
+
+      const imgElement = document.getElementById("refImage");
+      imgElement.onload = () => {
+        refDescriptors = extractDescriptors(imgElement);
+        console.log("🎯 Descritores da imagem de referência extraídos.");
+        setInterval(trackImage, 500); // começa tracking só depois que a referência estiver pronta
+      };
+      if (imgElement.complete) {
+        // Caso já tenha carregado (por cache)
+        imgElement.onload();
+      }
+    };
+
+    function extractDescriptors(imageElement) {
+      const mat = cv.imread(imageElement);
+      cv.cvtColor(mat, mat, cv.COLOR_RGBA2GRAY);
+
+      let kp = new cv.KeyPointVector();
+      let desc = new cv.Mat();
+      orb.detectAndCompute(mat, new cv.Mat(), kp, desc);
+
+      const maxFeatures = 2000;
+      if (desc.rows > maxFeatures) {
+        let keypointsData = [];
+        for (let i = 0; i < kp.size(); i++) {
+          let point = kp.get(i);
+          keypointsData.push({ index: i, response: point.response });
+        }
+
+        keypointsData.sort((a, b) => b.response - a.response);
+        let topIndices = keypointsData.slice(0, maxFeatures).map(kp => kp.index);
+
+        const limited = new cv.Mat();
+        const selectedDescriptors = new cv.MatVector();
+        for (let i = 0; i < topIndices.length; i++) {
+          let row = desc.row(topIndices[i]);
+          selectedDescriptors.push_back(row);
+          row.delete();
+        }
+
+        cv.vconcat(selectedDescriptors, limited);
+        desc.delete();
+        desc = limited;
+        selectedDescriptors.delete();
+      }
+
+      mat.delete();
+      kp.delete();
+
+      return desc;
+    }
+
+    function trackImage() {
+      if (!refDescriptors || refDescriptors.empty()) return;
+
+      ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+      let frame = cv.imread(canvas);
+      cv.cvtColor(frame, frame, cv.COLOR_RGBA2GRAY);
+
+      let kp = new cv.KeyPointVector();
+      let desc = new cv.Mat();
+      orb.detectAndCompute(frame, new cv.Mat(), kp, desc);
+
+      document.getElementById("featureCount").textContent = kp.size();
+
+      if (!desc.empty()) {
+        let matches = new cv.DMatchVector();
+        bf.match(refDescriptors, desc, matches);
+
+        let goodMatches = [];
+        for (let i = 0; i < matches.size(); i++) {
+          let m = matches.get(i);
+          if (m.distance < 40) {
+            goodMatches.push(m);
+          }
+        }
+
+        document.getElementById("goodMatchesCount").textContent = goodMatches.length;
+
+        if (goodMatches.length >= 40) {
+          console.log("🎯 Imagem reconhecida na cena!");
+        }
+
+        matches.delete();
+      }
+
+      frame.delete();
+      kp.delete();
+      desc.delete();
+    }
+  </script>
+</body>
+
+</html>

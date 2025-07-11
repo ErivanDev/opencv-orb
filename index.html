@@ -1,0 +1,202 @@
+<!DOCTYPE html>
+<html>
+
+<head>
+  <meta charset="utf-8" />
+  <title>Image Tracker com ORB (imagem em vez da câmera)</title>
+  <style>
+    img,
+    canvas {
+      max-width: 100%;
+      display: block;
+      margin: 10px 0;
+    }
+  </style>
+</head>
+
+<body>
+  <h2>Imagem de referência (para extrair descritores):</h2>
+  <input type="file" id="refInput" accept="image/*" />
+  <img id="refImage" style="display:none;" />
+
+  <h2>Imagem da cena (onde buscar referência):</h2>
+  <input type="file" id="sceneInput" accept="image/*" />
+  <img id="sceneImage" style="display:none;" />
+
+  <canvas id="canvas" width="1160" height="1160"></canvas>
+
+  <script src="https://docs.opencv.org/4.x/opencv.js"></script>
+  <script>
+    let orb, bf;
+    let refDescriptors = null;
+
+    const canvas = document.getElementById("canvas");
+    const ctx = canvas.getContext("2d");
+
+    cv['onRuntimeInitialized'] = () => {
+      console.log("✅ OpenCV.js pronto!");
+      orb = new cv.ORB();
+      bf = new cv.BFMatcher(cv.NORM_HAMMING, true); // crossCheck = true
+
+      // Carregar imagem de referência
+      document.getElementById("refInput").addEventListener("change", (e) => {
+        const file = e.target.files[0];
+        if (!file) return;
+
+        const refImg = document.getElementById("refImage");
+        refImg.src = URL.createObjectURL(file);
+        refImg.onload = () => {
+          if (refDescriptors) refDescriptors.delete();
+          refDescriptors = extractDescriptors(refImg);
+          console.log("🎯 Descritores da imagem de referência extraídos.");
+        };
+      });
+
+      // Carregar imagem da cena e rodar o tracking
+      document.getElementById("sceneInput").addEventListener("change", (e) => {
+        const file = e.target.files[0];
+        if (!file) return;
+
+        const sceneImg = document.getElementById("sceneImage");
+        sceneImg.src = URL.createObjectURL(file);
+        /*sceneImg.onload = () => {
+          // Desenha no canvas redimensionando para 640x480
+          ctx.clearRect(0, 0, canvas.width, canvas.height);
+          ctx.drawImage(sceneImg, 0, 0, canvas.width, canvas.height);
+
+          trackImage(); // roda o tracking na imagem carregada no canvas
+        };*/
+
+        sceneImg.onload = () => {
+          // Cria uma imagem OpenCV da cena
+          let src = cv.imread(sceneImg);
+
+          // Aplica rotação de 30 graus no centro
+          let center = new cv.Point(src.cols / 2, src.rows / 2);
+          let angle = 30;
+          let scale = 1;
+          let rotMat = cv.getRotationMatrix2D(center, angle, scale);
+          let rotated = new cv.Mat();
+          cv.warpAffine(src, rotated, rotMat, src.size(), cv.INTER_LINEAR, cv.BORDER_CONSTANT, new cv.Scalar());
+
+          // Aplica transformação de perspectiva leve (warp)
+          let dst = new cv.Mat();
+          let srcTri = cv.matFromArray(4, 1, cv.CV_32FC2, [
+            0, 0,
+            src.cols, 0,
+            0, src.rows,
+            src.cols, src.rows
+          ]);
+          let dstTri = cv.matFromArray(4, 1, cv.CV_32FC2, [
+            20, 30,
+            src.cols - 20, 10,
+            30, src.rows - 20,
+            src.cols - 10, src.rows - 30
+          ]);
+          let M = cv.getPerspectiveTransform(srcTri, dstTri);
+          cv.warpPerspective(rotated, dst, M, src.size(), cv.INTER_LINEAR, cv.BORDER_CONSTANT, new cv.Scalar());
+
+          // Ajusta contraste/brilho
+          let final = new cv.Mat();
+          let alpha = 1.5;  // contraste (>1 = mais contraste)
+          let beta = 40;    // brilho (+/-)
+          dst.convertTo(final, -1, alpha, beta);
+
+          // Desenha no canvas
+          cv.imshow(canvas, final);
+
+          // Libera memória
+          src.delete(); rotated.delete(); dst.delete(); final.delete();
+          srcTri.delete(); dstTri.delete(); M.delete(); rotMat.delete();
+
+          // Agora roda o tracking na imagem modificada
+          trackImage();
+        };
+      });
+    };
+
+    function extractDescriptors(imageElement) {
+      const mat = cv.imread(imageElement);
+      cv.cvtColor(mat, mat, cv.COLOR_RGBA2GRAY);
+
+      let kp = new cv.KeyPointVector();
+      let desc = new cv.Mat();
+      orb.detectAndCompute(mat, new cv.Mat(), kp, desc);
+
+      // Limitando para no máximo 20 descritores (os mais fortes)
+      const maxFeatures = 20;
+      if (desc.rows > maxFeatures) {
+        // Ordenar keypoints por response (força)
+        let keypointsData = [];
+        for (let i = 0; i < kp.size(); i++) {
+          let point = kp.get(i);
+          keypointsData.push({ index: i, response: point.response });
+        }
+        keypointsData.sort((a, b) => b.response - a.response);
+        let topIndices = keypointsData.slice(0, maxFeatures).map(k => k.index);
+
+        const limited = new cv.Mat();
+        const selectedDescriptors = new cv.MatVector();
+        for (let i = 0; i < topIndices.length; i++) {
+          let row = desc.row(topIndices[i]);
+          selectedDescriptors.push_back(row);
+          row.delete();
+        }
+        cv.vconcat(selectedDescriptors, limited);
+        desc.delete();
+        desc = limited;
+        selectedDescriptors.delete();
+      }
+
+      mat.delete();
+      kp.delete();
+
+      return desc;
+    }
+
+    function trackImage() {
+      if (!refDescriptors || refDescriptors.empty()) {
+        console.log("❌ Descritores da imagem de referência não carregados.");
+        return;
+      }
+
+      let frame = cv.imread(canvas);
+      cv.cvtColor(frame, frame, cv.COLOR_RGBA2GRAY);
+
+      let kp = new cv.KeyPointVector();
+      let desc = new cv.Mat();
+      orb.detectAndCompute(frame, new cv.Mat(), kp, desc);
+
+      if (!desc.empty()) {
+        let matches = new cv.DMatchVector();
+        bf.match(refDescriptors, desc, matches);
+
+        let goodMatches = [];
+        for (let i = 0; i < matches.size(); i++) {
+          let m = matches.get(i);
+          if (m.distance < 40) { // limiar para correspondências boas
+            goodMatches.push(m);
+          }
+        }
+
+        console.log(`🔍 ${goodMatches.length} correspondências boas.`);
+
+        if (goodMatches.length >= 10) {
+          console.log("🎯 Imagem reconhecida na cena!");
+        } else {
+          console.log("🚫 Sem correspondência suficiente.");
+        }
+
+        matches.delete();
+      } else {
+        console.log("🚫 Nenhum descritor encontrado na cena.");
+      }
+
+      frame.delete();
+      kp.delete();
+      desc.delete();
+    }
+  </script>
+</body>
+
+</html>

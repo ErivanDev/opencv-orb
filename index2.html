@@ -1,0 +1,66 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <title>Hash de imagem com ORB</title>
+</head>
+<body>
+  <h2>Selecione uma imagem:</h2>
+  <input type="file" id="fileInput" accept="image/*" />
+  <img id="inputImg" style="display:none;" />
+
+  <script src="https://docs.opencv.org/4.x/opencv.js"></script>
+  <script>
+    // Aguarda o OpenCV carregar
+    let openCvReady = false;
+    cv = cv || {};
+    cv['onRuntimeInitialized'] = () => {
+      openCvReady = true;
+      console.log("✅ OpenCV.js pronto!");
+
+      document.getElementById("fileInput").addEventListener("change", async function (e) {
+        const file = e.target.files[0];
+        if (!file) return;
+
+        const imgElement = document.getElementById("inputImg");
+        imgElement.src = URL.createObjectURL(file);
+        imgElement.onload = async () => {
+          const hash = await imageToHash(imgElement);
+          console.log("🔑 Hash SHA-256 dos descritores:", hash);
+        };
+      });
+    };
+
+    async function imageToHash(imageElement) {
+      const mat = cv.imread(imageElement);
+      cv.cvtColor(mat, mat, cv.COLOR_RGBA2GRAY);
+
+      let orb = new cv.ORB();
+      let keypoints = new cv.KeyPointVector();
+      let descriptors = new cv.Mat();
+
+      orb.detectAndCompute(mat, new cv.Mat(), keypoints, descriptors);
+
+      if (descriptors.empty()) {
+        console.warn("⚠️ Nenhum descritor encontrado.");
+        return null;
+      }
+
+      console.log(new Uint8Array(descriptors.data))
+
+      const flat = new Uint8Array(descriptors.data);
+      const hashBuffer = await crypto.subtle.digest("SHA-256", flat);
+      const hashArray = Array.from(new Uint8Array(hashBuffer));
+      const hashHex = hashArray.map(b => b.toString(16).padStart(2, "0")).join("");
+
+      // Limpa memória
+      mat.delete();
+      keypoints.delete();
+      descriptors.delete();
+      orb.delete();
+
+      return hashHex;
+    }
+  </script>
+</body>
+</html>
