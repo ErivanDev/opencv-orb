@@ -37,9 +37,20 @@
     const ctx = canvas.getContext("2d");
 
     function startCamera() {
-      navigator.mediaDevices.getUserMedia({ video: true })
-        .then(stream => video.srcObject = stream)
-        .catch(err => console.error("Erro ao acessar a câmera:", err));
+      // Tenta câmera traseira
+      navigator.mediaDevices.getUserMedia({
+        video: { facingMode: { exact: "environment" } }
+      })
+        .then(stream => {
+          video.srcObject = stream;
+        })
+        .catch(err => {
+          console.warn("🚫 Câmera traseira não disponível. Usando câmera padrão.");
+          // Fallback para qualquer câmera
+          navigator.mediaDevices.getUserMedia({ video: true })
+            .then(stream => video.srcObject = stream)
+            .catch(err => console.error("Erro ao acessar a câmera:", err));
+        });
     }
 
     cv['onRuntimeInitialized'] = () => {
@@ -53,11 +64,11 @@
       imgElement.onload = () => {
         refDescriptors = extractDescriptors(imgElement);
         console.log("🎯 Descritores da imagem de referência extraídos.");
-        setInterval(trackImage, 500); // começa tracking só depois que a referência estiver pronta
+        setInterval(trackImage, 500); // inicia o tracking após a imagem carregar
       };
+
       if (imgElement.complete) {
-        // Caso já tenha carregado (por cache)
-        imgElement.onload();
+        imgElement.onload(); // já está carregada
       }
     };
 
