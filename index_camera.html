@@ -19,8 +19,8 @@
   <img id="refImage" src="1.jpg" style="display:none;" />
 
   <h2>Stream da Câmera:</h2>
-  <video id="video" autoplay playsinline width="640" height="480"></video>
-  <canvas id="canvas" width="640" height="480" style="display:none;"></canvas>
+  <video display="none" id="video" autoplay playsinline width="640" height="480"></video>
+  <canvas id="canvas" width="640" height="480"></canvas>
 
   <p>
     <strong>Features detectadas:</strong> <span id="featureCount">0</span><br>
@@ -30,6 +30,7 @@
   <script src="https://docs.opencv.org/4.x/opencv.js"></script>
   <script>
     let refDescriptors = null;
+    let refKeypoints = null;
     let orb, bf;
 
     const video = document.getElementById("video");
@@ -46,7 +47,6 @@
         })
         .catch(err => {
           console.warn("🚫 Câmera traseira não disponível. Usando câmera padrão.");
-          // Fallback para qualquer câmera
           navigator.mediaDevices.getUserMedia({ video: true })
             .then(stream => video.srcObject = stream)
             .catch(err => console.error("Erro ao acessar a câmera:", err));
@@ -64,11 +64,11 @@
       imgElement.onload = () => {
         refDescriptors = extractDescriptors(imgElement);
         console.log("🎯 Descritores da imagem de referência extraídos.");
-        setInterval(trackImage, 500); // inicia o tracking após a imagem carregar
+        setInterval(trackImage, 500); // inicia tracking após imagem carregada
       };
 
       if (imgElement.complete) {
-        imgElement.onload(); // já está carregada
+        imgElement.onload();
       }
     };
 
@@ -79,6 +79,8 @@
       let kp = new cv.KeyPointVector();
       let desc = new cv.Mat();
       orb.detectAndCompute(mat, new cv.Mat(), kp, desc);
+
+      refKeypoints = kp; // salva os keypoints da imagem de referência
 
       const maxFeatures = 2000;
       if (desc.rows > maxFeatures) {
@@ -106,7 +108,7 @@
       }
 
       mat.delete();
-      kp.delete();
+      // refKeypoints não é deletado para uso posterior
 
       return desc;
     }
@@ -118,11 +120,11 @@
       let frame = cv.imread(canvas);
       cv.cvtColor(frame, frame, cv.COLOR_RGBA2GRAY);
 
-      let kp = new cv.KeyPointVector();
+      let frameKeypoints = new cv.KeyPointVector();
       let desc = new cv.Mat();
-      orb.detectAndCompute(frame, new cv.Mat(), kp, desc);
+      orb.detectAndCompute(frame, new cv.Mat(), frameKeypoints, desc);
 
-      document.getElementById("featureCount").textContent = kp.size();
+      document.getElementById("featureCount").textContent = frameKeypoints.size();
 
       if (!desc.empty()) {
         let matches = new cv.DMatchVector();
@@ -138,6 +140,17 @@
 
         document.getElementById("goodMatchesCount").textContent = goodMatches.length;
 
+        // 👉 Desenha os pontos correspondentes
+        ctx.lineWidth = 2;
+        ctx.strokeStyle = "lime";
+        for (let i = 0; i < goodMatches.length; i++) {
+          let m = goodMatches[i];
+          let pt = frameKeypoints.get(m.trainIdx).pt;
+          ctx.beginPath();
+          ctx.arc(pt.x, pt.y, 5, 0, 2 * Math.PI);
+          ctx.stroke();
+        }
+
         if (goodMatches.length >= 40) {
           console.log("🎯 Imagem reconhecida na cena!");
         }
@@ -146,7 +159,7 @@
       }
 
       frame.delete();
-      kp.delete();
+      frameKeypoints.delete();
       desc.delete();
     }
   </script>
